@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import re
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,8 @@ from reportlab.platypus import (
 
 from propgen._time import format_local
 from propgen.config.loader import PropGenConfig
-from propgen.models import LineItem, Proposal, ProposalVersion
+from propgen.llm_text import unwrap_prose_maybe_json
+from propgen.models import Proposal, ProposalVersion
 
 
 def _simple_md_paragraphs(text: str, style: ParagraphStyle) -> list[Any]:
@@ -68,6 +70,80 @@ def _inline_md(s: str) -> str:
     return x
 
 
+def _description_to_reportlab(description: str) -> str:
+    """Preserve line breaks and <i>…</i>; escape other HTML for ReportLab Paragraphs."""
+    chunks = re.split(r"(?i)<br\s*/?>", description)
+    parts: list[str] = []
+    for chunk in chunks:
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        parts.append(_inline_i_tags_only(chunk))
+    return "<br/>".join(parts)
+
+
+def _inline_i_tags_only(s: str) -> str:
+    segments = re.split(r"(?i)(<i>|</i>)", s)
+    out: list[str] = []
+    in_i = False
+    for seg in segments:
+        low = seg.lower()
+        if low == "<i>":
+            if in_i:
+                out.append(html.escape(seg))
+            else:
+                out.append("<i>")
+                in_i = True
+        elif low == "</i>":
+            if in_i:
+                out.append("</i>")
+                in_i = False
+            else:
+                out.append(html.escape(seg))
+        else:
+            out.append(html.escape(seg))
+    if in_i:
+        out.append("</i>")
+    return "".join(out)
+
+
+def _line_item_description_cell(name: str, description: str, style: ParagraphStyle) -> Paragraph:
+    safe_name = escape_md(name)
+    if not description or not description.strip():
+        return Paragraph(safe_name, style)
+    body = _description_to_reportlab(description.strip())
+    if not body:
+        return Paragraph(safe_name, style)
+    if "<i>" in body.lower():
+        markup = f"{safe_name}<br/>{body}"
+    else:
+        markup = f"{safe_name}<br/><i>{body}</i>"
+    return Paragraph(markup, style)
+
+
+def _logo_flowable(path: Path, max_w: float, max_h: float) -> Any | None:
+    if not path.is_file():
+        return None
+    suffix = path.suffix.lower()
+    if suffix in (".png", ".jpg", ".jpeg", ".gif"):
+        try:
+            return Image(str(path), width=max_w, height=max_h)
+        except OSError:
+            return None
+    if suffix == ".svg":
+        try:
+            from svglib.svglib import svg2rlg
+        except ImportError:
+            return None
+        drawing = svg2rlg(str(path))
+        if drawing.width <= 0 or drawing.height <= 0:
+            return None
+        scale = min(max_w / drawing.width, max_h / drawing.height)
+        drawing.scale(scale, scale)
+        return drawing
+    return None
+
+
 def _split_narrative(narrative_md: str) -> tuple[str, str]:
     m = re.search(r"\n(?=#+\s)", narrative_md)
     if m:
@@ -91,6 +167,13 @@ def _sync_render(
         leading=14,
         alignment=TA_LEFT,
         spaceAfter=6,
+    )
+    li_cell = ParagraphStyle(
+        name="LineItemCell",
+        parent=body,
+        fontSize=8,
+        leading=10,
+        spaceAfter=0,
     )
 
     def on_page(canv, doc) -> None:  # noqa: ANN001
@@ -117,23 +200,21 @@ def _sync_render(
     story: list[Any] = []
     header_tbl_data: list[list[Any]] = []
     logo_path = Path(config.business.brand.logo_path)
-    if logo_path.is_file():
-        try:
-            im = Image(str(logo_path), width=1.4 * inch, height=0.45 * inch)
-            hdr = Paragraph(
-                f"<b>{config.business.name}</b><br/>"
-                f"{config.operator_email}<br/>"
-                f"{config.business.address or ''}",
-                ParagraphStyle(
-                    name="hdr",
-                    parent=body,
-                    alignment=TA_RIGHT,
-                    fontSize=9,
-                ),
-            )
-            header_tbl_data.append([im, hdr])
-        except OSError:
-            pass
+    max_logo_w, max_logo_h = 1.75 * inch, 0.48 * inch
+    im = _logo_flowable(logo_path, max_logo_w, max_logo_h)
+    if im is not None:
+        hdr = Paragraph(
+            f"<b>{config.business.name}</b><br/>"
+            f"{config.operator_email}<br/>"
+            f"{config.business.address or ''}",
+            ParagraphStyle(
+                name="hdr",
+                parent=body,
+                alignment=TA_RIGHT,
+                fontSize=9,
+            ),
+        )
+        header_tbl_data.append([im, hdr])
     if header_tbl_data:
         t = Table(header_tbl_data, colWidths=[2.2 * inch, 4.0 * inch])
         t.setStyle(
@@ -160,7 +241,8 @@ def _sync_render(
     story.append(meta)
     story.append(Spacer(1, 12))
 
-    cover, body_md = _split_narrative(version.narrative_md)
+    narr_raw = unwrap_prose_maybe_json(version.narrative_md or "")
+    cover, body_md = _split_narrative(narr_raw)
     story.extend(_simple_md_paragraphs(cover or " ", body))
     if body_md:
         story.append(Spacer(1, 10))
@@ -168,14 +250,15 @@ def _sync_render(
 
     story.append(Spacer(1, 14))
     story.append(Paragraph("<b>Investment</b>", body))
-    li_rows: list[list[str]] = [
+    li_rows: list[list[Any]] = [
         ["Qty", "Description", "Unit", "Unit price", "Line total"],
     ]
     for li in sorted(version.line_items, key=lambda x: x.sort_order):
+        desc_cell = _line_item_description_cell(li.name, li.description or "", li_cell)
         li_rows.append(
             [
                 f"{li.quantity:g}",
-                f"{li.name}<br/><i>{li.description}</i>" if li.description else li.name,
+                desc_cell,
                 li.unit,
                 f"{li.unit_price:.2f}",
                 f"{li.line_total:.2f}",
@@ -184,7 +267,15 @@ def _sync_render(
     li_rows.append(["", "", "", "Subtotal", f"{proposal.subtotal:.2f}"])
     li_rows.append(["", "", "", "Tax", f"{proposal.tax_amount:.2f}"])
     li_rows.append(["", "", "", "Discount", f"-{proposal.discount_amount:.2f}"])
-    li_rows.append(["", "", "", "<b>Total</b>", f"<b>{proposal.total:.2f} {proposal.currency}</b>"])
+    li_rows.append(
+        [
+            "",
+            "",
+            "",
+            Paragraph("<b>Total</b>", li_cell),
+            Paragraph(f"<b>{proposal.total:.2f} {proposal.currency}</b>", li_cell),
+        ]
+    )
     tbl = Table(li_rows, colWidths=[0.5 * inch, 3.0 * inch, 0.7 * inch, 0.9 * inch, 1.0 * inch])
     tbl.setStyle(
         TableStyle(

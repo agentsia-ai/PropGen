@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
 import anthropic
 
 from propgen.config.loader import APIKeys, PropGenConfig
+from propgen.llm_text import normalize_proposal_draft_dict, parse_json_objectish, unwrap_prose_maybe_json
 from propgen.models import Proposal, ProposalVersion
 
 logger = logging.getLogger(__name__)
@@ -71,10 +71,11 @@ Line items (authoritative for pricing copy):
 Write narrative_md + short cover email proposing they review the PDF.
 """
         raw = await self._json_completion(user)
-        nar = str(raw.get("narrative_md", ""))[: self.max_chars]
+        raw = normalize_proposal_draft_dict(raw)
+        nar = unwrap_prose_maybe_json(str(raw.get("narrative_md", "")))[: self.max_chars]
         subj = str(raw.get("cover_email_subject", self.config.proposal.cover_email_subject_template))
         subj = subj.replace("{{ subject }}", proposal.subject)
-        body = str(raw.get("cover_email_body", ""))
+        body = unwrap_prose_maybe_json(str(raw.get("cover_email_body", "")))
         return nar, subj, body
 
     async def draft_followup(self, proposal: Proposal, *, attempt: int = 1) -> tuple[str, str]:
@@ -83,13 +84,13 @@ Client: {proposal.client.name}
 Subject: {proposal.subject}
 Keep under 200 words. Return JSON {{"subject":"...","body":"..."}}"""
         raw = await self._json_completion(user)
-        return str(raw.get("subject", "Following up")), str(raw.get("body", ""))
+        return str(raw.get("subject", "Following up")), unwrap_prose_maybe_json(str(raw.get("body", "")))
 
     async def draft_acceptance_welcome(self, proposal: Proposal) -> tuple[str, str]:
         user = f"""The client signed the proposal for {proposal.subject}.
 Draft a short welcome / kickoff email. JSON {{"subject":"...","body":"..."}}"""
         raw = await self._json_completion(user)
-        return str(raw.get("subject", "Next steps")), str(raw.get("body", ""))
+        return str(raw.get("subject", "Next steps")), unwrap_prose_maybe_json(str(raw.get("body", "")))
 
     async def _json_completion(self, user: str) -> dict:
         msg = await self.client.messages.create(
@@ -100,8 +101,8 @@ Draft a short welcome / kickoff email. JSON {{"subject":"...","body":"..."}}"""
         )
         block = msg.content[0]
         text = block.text if hasattr(block, "text") else str(block)
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            logger.warning("drafter returned non-JSON")
-            return {"narrative_md": text, "cover_email_subject": "Proposal", "cover_email_body": text}
+        parsed = parse_json_objectish(text)
+        if parsed is not None:
+            return parsed
+        logger.warning("drafter returned non-JSON")
+        return {"narrative_md": text, "cover_email_subject": "Proposal", "cover_email_body": text}
