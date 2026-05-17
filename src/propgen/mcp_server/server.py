@@ -36,6 +36,29 @@ from propgen.service import (
 
 logger = logging.getLogger(__name__)
 
+
+def _catalog_slug_pairs(raw: Any) -> list[tuple[str, float]]:
+    """Normalize create_proposal catalog_slugs from MCP clients / LLMs."""
+    pairs: list[tuple[str, float]] = []
+    if not isinstance(raw, list):
+        return pairs
+    for entry in raw:
+        if isinstance(entry, dict):
+            slug = entry.get("slug") or entry.get("catalog_slug")
+            if slug is None:
+                continue
+            try:
+                pairs.append((str(slug), float(entry.get("quantity", 1))))
+            except (TypeError, ValueError):
+                continue
+        elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            try:
+                pairs.append((str(entry[0]), float(entry[1])))
+            except (TypeError, ValueError):
+                continue
+    return pairs
+
+
 app = Server("propgen")
 
 config = None  # type: ignore[assignment]
@@ -89,11 +112,40 @@ async def list_tools() -> list[Tool]:
                     "subject": {"type": "string"},
                     "catalog_slugs": {
                         "type": "array",
+                        "description": (
+                            "Catalog lines: objects {slug, quantity} or "
+                            "{catalog_slug, quantity}; legacy [slug, quantity] pairs "
+                            "still accepted when sent."
+                        ),
                         "items": {
-                            "type": "array",
-                            "items": [{"type": "string"}, {"type": "number"}],
+                            "anyOf": [
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "slug": {"type": "string"},
+                                        "quantity": {"type": "number"},
+                                    },
+                                    "required": ["slug", "quantity"],
+                                },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "catalog_slug": {"type": "string"},
+                                        "quantity": {"type": "number"},
+                                    },
+                                    "required": ["catalog_slug", "quantity"],
+                                },
+                                {
+                                    "type": "array",
+                                    "minItems": 2,
+                                    "maxItems": 2,
+                                    "prefixItems": [
+                                        {"type": "string"},
+                                        {"type": "number"},
+                                    ],
+                                },
+                            ],
                         },
-                        "description": "Pairs of [slug, quantity]",
                     },
                 },
                 "required": ["client_email", "subject", "catalog_slugs"],
@@ -266,11 +318,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return _json({"ok": True, "proposal_id": prop.id, "version_id": ver.id})
 
     if name == "create_proposal":
-        slugs_raw = arguments.get("catalog_slugs") or []
-        pairs: list[tuple[str, float]] = []
-        for pair in slugs_raw:
-            if isinstance(pair, (list, tuple)) and len(pair) >= 2:
-                pairs.append((str(pair[0]), float(pair[1])))
+        pairs = _catalog_slug_pairs(arguments.get("catalog_slugs") or [])
         prop, ver = await create_proposal_explicit(
             config,
             keys,

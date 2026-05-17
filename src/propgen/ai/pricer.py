@@ -101,16 +101,18 @@ Scope (HTML-stripped markdown render for hints — prices only from catalog):
         items: list[LineItem] = []
         conf = float(data.get("confidence", 0))
         for i, row in enumerate(data.get("line_items") or []):
-            slug = str(row.get("slug", ""))
+            raw_slug = row.get("slug", row.get("catalog_slug", ""))
+            slug = str(raw_slug or "")
             qty = float(row.get("quantity", 1))
             if slug not in cat:
                 continue
             entry = cat[slug]
             up = float(entry.get("unit_price", 0))
+            desc = row.get("rationale", row.get("description", ""))
             items.append(
                 LineItem(
                     name=str(entry.get("name", slug)),
-                    description=str(row.get("rationale", "")),
+                    description=str(desc or ""),
                     quantity=qty,
                     unit=str(entry.get("unit", "ea")),
                     unit_price=up,
