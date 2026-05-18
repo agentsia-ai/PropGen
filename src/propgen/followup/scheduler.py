@@ -22,8 +22,8 @@ async def enqueue_cadence_followups(
     if existing:
         return []
     out: list[FollowUpRecord] = []
-    base = prop.updated_at or now_utc()
-    for i, days in enumerate(config.proposal.follow_up_cadence_days):
+    base = proposal.updated_at or now_utc()
+    for days in config.proposal.follow_up_cadence_days:
         due = base + timedelta(days=days)
         rec = FollowUpRecord(
             proposal_id=proposal.id,
