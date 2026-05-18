@@ -394,6 +394,14 @@ async def send_proposal(
     prop = await db.get_proposal(proposal_id)
     if not prop:
         return {"ok": False, "error": "not_found"}
+    # Idempotent retries: token is rotated after send; check before approval gate.
+    if prop.status == ProposalStatus.SENT and prop.docusign_envelope_id:
+        return {
+            "ok": True,
+            "already_sent": True,
+            "envelope_id": prop.docusign_envelope_id,
+            "proposal_id": proposal_id,
+        }
     if config.proposal.require_approval:
         if approval_token != prop.send_approval_token:
             return {"ok": False, "error": "approval_token_mismatch"}
@@ -425,15 +433,28 @@ async def send_proposal(
     except Exception as e:  # noqa: BLE001
         logger.exception("DocuSign send failed")
         return {"ok": False, "error": str(e)}
-    ok = await db.try_send_lock(proposal_id, approval_token, env_id)
-    if not ok:
-        return {"ok": False, "error": "send_lock_failed_or_race"}
-    fresh = await db.get_proposal(proposal_id)
-    if fresh:
+    lock_ok = await db.try_send_lock(proposal_id, approval_token, env_id)
+    we_won_send_lock = lock_ok
+    if not lock_ok:
+        fresh = await db.get_proposal(proposal_id)
+        if (
+            fresh
+            and fresh.status == ProposalStatus.SENT
+            and fresh.docusign_envelope_id
+        ):
+            env_id = fresh.docusign_envelope_id
+            prop = fresh
+            we_won_send_lock = False
+        else:
+            return {"ok": False, "error": "send_lock_failed_or_race"}
+    else:
+        fresh = await db.get_proposal(proposal_id)
+
+    if we_won_send_lock:
         await db.append_acceptance_event(
-            AcceptanceEvent(proposal_id=fresh.id, kind=AcceptanceKind.SENT)
+            AcceptanceEvent(proposal_id=proposal_id, kind=AcceptanceKind.SENT)
         )
-    if prop.cover_email_subject and prop.client.email:
+    if we_won_send_lock and prop.cover_email_subject and prop.client.email:
         await send_smtp_message(
             config,
             keys,
@@ -441,7 +462,7 @@ async def send_proposal(
             subject=prop.cover_email_subject,
             body=prop.cover_email_body,
         )
-    final = await db.get_proposal(proposal_id)
+    final = fresh or await db.get_proposal(proposal_id)
     if final:
         await enqueue_cadence_followups(config, db, final)
     return {"ok": True, "envelope_id": env_id, "proposal_id": proposal_id}
