@@ -63,7 +63,7 @@ class CrossEngineConfig(BaseModel):
 
 class DocuSignConfig(BaseModel):
     base_url: str = "https://demo.docusign.net/restapi"
-    oauth_host: str = "account-d.docusign.net"
+    oauth_host: str = "account-d.docusign.com"
     template_id: str = ""
     sign_here_anchor: str = "<<SIGN_HERE>>"
     webhook_secret: str = ""
