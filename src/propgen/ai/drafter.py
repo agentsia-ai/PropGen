@@ -57,6 +57,7 @@ class ProposalDrafter:
             f"- {li.name} ({li.quantity} {li.unit} @ {li.unit_price} {proposal.currency})"
             for li in items
         )
+        # operator_* in the prompt is human escalation context only (not cover-email signature).
         user = f"""Business: {self.config.business.name}
 Operator: {self.config.operator_name}
 Communication tone: {self.config.business.communication_tone}

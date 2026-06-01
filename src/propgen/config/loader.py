@@ -102,7 +102,7 @@ class OutreachConfig(BaseModel):
     smtp_starttls: bool = True
     smtp_username: str = ""
     from_address: str = ""
-    email_signature: str = "Best,\n{operator_name}\n{business_name}"
+    email_signature: str = "Best,\n{agent_name}\n{business_name}"
     daily_email_limit: int = 200
 
 
@@ -120,8 +120,12 @@ class DatabaseConfig(BaseModel):
 
 
 class PropGenConfig(BaseModel):
+    client_name: str = ""
     operator_name: str = "Operator"
+    operator_title: str = ""
     operator_email: str = "ops@example.com"
+    agent_name: str = ""
+    agent_email: str = ""
     business: BusinessConfig = BusinessConfig()
     ai: AIConfig = AIConfig()
     pricing: PricingConfig = PricingConfig()
@@ -171,6 +175,32 @@ class APIKeys(BaseModel):
         if "SMTP_PORT" in values and isinstance(values["SMTP_PORT"], str):
             values["SMTP_PORT"] = int(values["SMTP_PORT"])
         return cls(**values)
+
+
+def display_agent_name(config: PropGenConfig) -> str:
+    """Agent-facing label for logs and MCP metadata.
+
+    Productized deployments (e.g. agentsia-core) set config.agent_name.
+    Standalone PropGen installs fall back to the engine name.
+    """
+    name = (config.agent_name or "").strip()
+    return name or "propgen"
+
+
+def format_email_signature(config: PropGenConfig, template: str | None = None) -> str:
+    """Render outreach/cover email signature (agent_name + business_name by default)."""
+    tmpl = template if template is not None else config.outreach.email_signature
+    if not tmpl:
+        return ""
+    return tmpl.format(
+        agent_name=config.agent_name,
+        agent_email=config.agent_email,
+        business_name=config.business.name,
+        operator_name=config.operator_name,
+        operator_title=config.operator_title,
+        operator_email=config.operator_email,
+        client_name=config.client_name,
+    ).strip()
 
 
 def load_config(config_path: str | Path | None = None) -> PropGenConfig:

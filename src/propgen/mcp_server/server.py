@@ -15,7 +15,7 @@ from mcp.types import TextContent, Tool
 from propgen.ai.classifier import RequestClassifier
 from propgen.ai.drafter import ProposalDrafter
 from propgen.ai.pricer import PricingAssistant
-from propgen.config.loader import db_sqlite_path, load_api_keys, load_config
+from propgen.config.loader import display_agent_name, db_sqlite_path, load_api_keys, load_config
 from propgen.crm.database import ProposalDatabase
 from propgen.models import ProposalStatus
 from propgen.pricing.catalog import load_catalog_entries
@@ -297,7 +297,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     if name == "get_pipeline_summary":
         counts = await db.pipeline_counts()
-        return _json({"status_counts": counts})
+        return _json({"agent": display_agent_name(config), "status_counts": counts})
 
     if name == "create_proposal_from_lead":
         result = await create_proposal_from_lead(
@@ -474,7 +474,8 @@ async def main(
     db = ProposalDatabase(db_sqlite_path(config))
 
     logging.basicConfig(level=logging.INFO, stream=sys.stderr)
-    logger.info("Starting PropGen MCP server...")
+    agent_label = display_agent_name(config)
+    logger.info("Starting PropGen MCP server (agent=%s)...", agent_label)
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 

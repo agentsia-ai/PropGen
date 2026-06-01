@@ -93,7 +93,12 @@ async def send_envelope_for_pdf(
         raise ValueError("DOCUSIGN_ACCOUNT_ID is required to send envelopes")
     b64 = base64.b64encode(pdf_bytes).decode("ascii")
     anchor = config.docusign.sign_here_anchor
-    body = {
+    email_settings: dict[str, str] = {}
+    if config.operator_email:
+        email_settings["replyEmailAddressOverride"] = config.operator_email
+    if config.operator_name:
+        email_settings["replyEmailNameOverride"] = config.operator_name
+    body: dict[str, Any] = {
         "emailSubject": email_subject,
         "emailBlurb": email_body,
         "documents": [
@@ -127,6 +132,8 @@ async def send_envelope_for_pdf(
         },
         "status": "sent",
     }
+    if email_settings:
+        body["emailSettings"] = email_settings
     url = f"{config.docusign.base_url.rstrip('/')}/v2.1/accounts/{account_id}/envelopes"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=120.0) as client:

@@ -15,7 +15,7 @@ import aiosmtplib
 
 from propgen._time import now_utc, to_iso
 from propgen.ai.drafter import ProposalDrafter
-from propgen.config.loader import APIKeys, PropGenConfig
+from propgen.config.loader import APIKeys, PropGenConfig, format_email_signature
 from propgen.cross_engine import fetch_appointment, fetch_lead
 from propgen.crm.database import ProposalDatabase
 from propgen.followup.scheduler import enqueue_cadence_followups
@@ -49,6 +49,16 @@ async def resolve_proposal_id(db: ProposalDatabase, prefix: str) -> Optional[str
     return await db.find_proposal_id_prefix(p)
 
 
+def _cover_email_from_address(config: PropGenConfig, keys: APIKeys) -> str:
+    """From address for the SMTP cover note (agent identity, not the operator inbox)."""
+    return (
+        config.agent_email
+        or keys.smtp_from_email
+        or config.outreach.from_address
+        or config.operator_email
+    )
+
+
 async def send_smtp_message(
     config: PropGenConfig,
     keys: APIKeys,
@@ -56,13 +66,14 @@ async def send_smtp_message(
     to_email: str,
     subject: str,
     body: str,
+    from_address: str | None = None,
 ) -> bool:
     if not keys.smtp_username or not keys.smtp_password:
         logger.warning("SMTP not configured — skipping email send.")
         return False
     host = keys.smtp_host or config.outreach.smtp_host
     port = int(keys.smtp_port or config.outreach.smtp_port)
-    from_addr = (
+    from_addr = from_address or (
         keys.smtp_from_email
         or config.outreach.from_address
         or config.operator_email
@@ -455,12 +466,20 @@ async def send_proposal(
             AcceptanceEvent(proposal_id=proposal_id, kind=AcceptanceKind.SENT)
         )
     if we_won_send_lock and prop.cover_email_subject and prop.client.email:
+        # Intentional agent-identity moment: cover note is signed as agent_name
+        # (product demo when deployed via agentsia-core), separate from the
+        # operator-branded DocuSign envelope reply-to above.
+        cover_body = prop.cover_email_body.strip()
+        sig = format_email_signature(config)
+        if sig:
+            cover_body = f"{cover_body}\n\n{sig}"
         await send_smtp_message(
             config,
             keys,
             to_email=prop.client.email,
             subject=prop.cover_email_subject,
-            body=prop.cover_email_body,
+            body=cover_body,
+            from_address=_cover_email_from_address(config, keys),
         )
     final = fresh or await db.get_proposal(proposal_id)
     if final:

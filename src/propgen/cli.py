@@ -13,7 +13,7 @@ from rich.table import Table
 
 from propgen import __version__
 from propgen._time import format_local
-from propgen.config.loader import db_sqlite_path, load_api_keys, load_config
+from propgen.config.loader import display_agent_name, db_sqlite_path, load_api_keys, load_config
 from propgen.crm.database import ProposalDatabase
 from propgen.models import ProposalStatus
 from propgen.pricing.catalog import load_catalog_entries
@@ -64,9 +64,9 @@ def pipeline() -> None:
     """Summary counts by proposal status."""
 
     async def _run() -> None:
-        _, _, database = await _boot()
+        cfg, _, database = await _boot()
         counts = await database.pipeline_counts()
-        table = Table(title="Proposal pipeline")
+        table = Table(title=f"PropGen Pipeline ({display_agent_name(cfg)})")
         table.add_column("Status", style="cyan")
         table.add_column("Count", justify="right", style="yellow")
         # Empty DB: GROUP BY returns no rows — still show every lifecycle bucket at 0.
