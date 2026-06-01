@@ -11,11 +11,13 @@
 # ============================================================
 
 # --- Identity ---
-# The operator is the human (or shared inbox) who approves proposals
-# the engine drafts. operator_email is also the default From address
-# on cover notes and follow-ups.
+# operator_* — human who approves proposals, PDF author, DocuSign reply-to.
+# agent_* — persona on cover-note email signature and MCP/log labels.
 operator_name: "Pat Operator"
+operator_title: "Principal Consultant"
 operator_email: "ops@northstar-design.example"
+agent_name: "Proposal Assistant"
+agent_email: "proposals@northstar-design.example"
 
 # --- Business ---
 business:
@@ -216,9 +218,10 @@ outreach:
   smtp_username: ""           # filled from .env at runtime
   from_address: "ops@northstar-design.example"
 
+  # Cover-note signature uses agent_name + business_name (not operator_*).
   email_signature: |
     Best,
-    {operator_name}
+    {agent_name}
     {business_name}
 
 # --- Follow-up scheduler ---

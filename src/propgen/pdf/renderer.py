@@ -228,10 +228,14 @@ def _sync_render(
     valid = (
         format_local(proposal.expires_at, config.business.timezone) if proposal.expires_at else ""
     )
+    prepared_by = config.operator_name
+    if config.operator_title:
+        prepared_by = f"{config.operator_name}, {config.operator_title}"
     meta = Table(
         [
             ["Proposal ID:", proposal.id[:8]],
             ["Prepared for:", proposal.client.name or proposal.client.email],
+            ["Prepared by:", prepared_by],
             ["Prepared on:", prep],
             ["Valid until:", valid or "—"],
         ],
